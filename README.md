@@ -1,300 +1,231 @@
-# Assignment 5: Production-Grade EpicBook — Terraform + Ansible Roles (Azure)
+# EpicBook --- Terraform & Ansible on Microsoft Azure
 
-## Task 1: Use Terraform to Provision a Cloud VM
+Infrastructure-as-Code and configuration-management project for
+preparing a production-oriented deployment environment for the EpicBook
+Node.js application.
 
-### What I did
+The project uses **Terraform** to describe the Azure infrastructure and
+**Ansible** to configure the Linux server and prepare the application
+stack.
 
-I prepared Terraform configuration files to provision the infrastructure required for the EpicBook application on Microsoft Azure.
+> **Current project status:** Local configuration has been prepared and
+> validated. Azure provisioning and remote application deployment have
+> not yet been performed because an Azure subscription was not
+> available. This README distinguishes completed local checks from
+> deployment steps that remain pending.
 
-The configuration defines an Azure resource group, virtual network, subnet, Network Security Group, public IP address, network interface and Ubuntu Linux virtual machine.
+## Project Overview
 
-I configured inbound network rules for SSH (port 22) and HTTP (port 80). I also introduced an SSH CIDR variable to restrict administrative access to an approved IP address.
+### Terraform --- Azure infrastructure
 
-I initialized the Terraform working directory locally and successfully validated the configuration using Terraform.
+The Terraform configuration describes the Azure resources required by
+the application:
 
-**Commands executed:**
+-   Resource Group
+-   Virtual Network and subnet
+-   Network Security Group (NSG)
+-   Public IP address
+-   Network interface
+-   Ubuntu Linux virtual machine
 
-```bash
-terraform fmt -recursive terraform/azure
+The network configuration includes inbound access for:
 
-terraform -chdir=terraform/azure init -backend=false
+-   **SSH:** TCP port `22`
+-   **HTTP:** TCP port `80`
 
-terraform -chdir=terraform/azure validate
-```
+SSH access is controlled through the `admin_ssh_cidr` input variable so
+that administrative access can be restricted to an approved source IP
+range.
 
-### What I learned
+### Ansible --- server configuration
 
-I learned how Terraform uses declarative configuration files to describe cloud infrastructure and how infrastructure can be formatted, initialized and validated before deployment.
+The Ansible project is organized into reusable roles:
 
-I also learned the importance of restricting SSH access and managing infrastructure configuration securely.
+  -----------------------------------------------------------------------
+  Role                                Responsibility
+  ----------------------------------- -----------------------------------
+  `common`                            Installs basic server dependencies.
 
-### Issue faced and solution
+  `mysql`                             Installs MySQL and prepares the
+                                      application database and user.
 
-I initially configured SSH access using an unrestricted source address (`*`). I corrected this by introducing an `admin_ssh_cidr` variable.
+  `nginx`                             Installs and configures Nginx as a
+                                      reverse proxy.
 
-I also discovered that the configured SSH public-key path did not match the key generated for this project. I corrected the path to reference the dedicated EpicBook SSH public key.
+  `epicbook`                          Retrieves the application source,
+                                      installs Node.js dependencies and
+                                      prepares PM2 to manage the
+                                      application process.
+  -----------------------------------------------------------------------
 
-**Current status:** Terraform configuration initialized and validated successfully. Azure resources have not yet been provisioned.
+The application database is named `bookstore`. The application is
+expected to listen on port `8080`, with Nginx acting as the reverse
+proxy.
 
-## 2. Configure Passwordless SSH
+## Project Structure
 
-### What I did
-
-I generated a dedicated ED25519 SSH key pair for the EpicBook infrastructure project.
-
-The key pair was created using:
-
-```bash
-ssh-keygen -t ed25519 -C "epicbook-azure" -f ~/.ssh/epicbook_azure
-```
-
-I configured Terraform to reference the public key during virtual machine creation.
-
-The private key remains on my local machine and is excluded from version control.
-
-### What I learned
-
-I learned how SSH public-key authentication works and why it is important for secure, passwordless server access.
-
-I also learned how SSH key authentication supports automation tools such as Ansible.
-
-### Issue faced and solution
-
-The existing Terraform configuration referenced a public key that did not exist on my machine.
-
-I resolved this by generating a dedicated SSH key pair and updating Terraform to use the correct public-key path.
-
-**Current status:** SSH key generation and Terraform configuration are complete. Actual SSH connectivity will be tested after the Azure virtual machine is provisioned.
-
-## 3. Run Ansible Roles to Deploy EpicBook
-
-### What I did
-
-I prepared a role-based Ansible configuration to automate the installation and configuration of the EpicBook application environment.
-
-The project contains four main roles:
-
-- **common:** Installs basic server dependencies.
-- **mysql:** Installs MySQL, starts the database service and configures the application database and user.
-- **nginx:** Installs and configures Nginx as a reverse proxy.
-- **epicbook:** Installs Node.js dependencies, retrieves the application source code and configures PM2.
-
-I also updated the database configuration to use the `bookstore` database expected by the original EpicBook application.
-
-To improve security, I configured Ansible Vault to protect the database password rather than storing it as plaintext in the playbook.
-
-I successfully ran the Ansible syntax check.
-
-```bash
-ansible-playbook --syntax-check \
-  -i ansible/inventory.ini.example \
-  --ask-vault-pass \
-  ansible/site.yml
-```
-
-### What I learned
-
-I learned how Ansible roles help organize automation into reusable components.
-
-I also learned how Ansible Vault protects sensitive information and how syntax checking helps identify playbook errors before execution.
-
-### Issue faced and solution
-
-One security issue was the presence of a hardcoded database password in the original MySQL task.
-
-I replaced the hardcoded password with a variable connected to an encrypted Ansible Vault file.
-
-I also corrected the database name to match the application configuration.
-
-**Current status:** Ansible playbook syntax validation passed. The playbook has not yet been executed against a cloud server.
-
-## Task 2: Application Deployment and Verification
-
-### What I did
-
-The application deployment stage is prepared in the Ansible configuration.
-
-The intended deployment process is to install the application dependencies, configure the MySQL database, start the Node.js application using PM2 and expose the application through Nginx.
-
-The original EpicBook application uses Node.js and Express, with its default application port set to 8080.
-
-The deployment configuration will be tested against the Azure virtual machine once the infrastructure is available.
-
-### What I learned
-
-I learned how Nginx acts as a reverse proxy by accepting external HTTP requests and forwarding them to an application running on an internal port.
-
-I also learned why the application port and Nginx proxy configuration must match.
-
-### Issue faced and solution
-
-During configuration review, I identified a port mismatch between the original application's default port (8080) and the existing Nginx proxy configuration (3000).
-
-The configuration needs to be aligned to port 8080 before deployment verification.
-
-**Current status:** Application deployment and browser verification are pending.
-
-## 2. Confirm Idempotent Re-run
-
-### What I did
-
-I prepared the Ansible playbook using reusable roles and declarative tasks.
-
-The playbook is intended to be executed repeatedly to maintain the desired server configuration without introducing unnecessary changes.
-
-The idempotency test will be performed after the first successful deployment by running the playbook again and reviewing the execution summary.
-
-### What I learned
-
-I learned that idempotency is an important property of configuration management because it allows automation to be repeated safely.
-
-### Issue faced and solution
-
-No idempotency test has been performed yet because the playbook has not been executed against a provisioned server.
-
-**Current status:** Pending deployment.
-
-## 3. Verify Nginx Configuration
-
-### What I did
-
-I prepared an Nginx configuration template under:
-
-```text
-ansible/roles/nginx/templates/epicbook.conf.j2
-```
-
-The template is intended to configure Nginx as a reverse proxy for the EpicBook Node.js application.
-
-The expected proxy destination is:
-
-```nginx
-proxy_pass http://127.0.0.1:8080;
-```
-
-The Nginx configuration will be tested on the server using:
-
-```bash
-sudo nginx -t
-```
-
-### What I learned
-
-I learned how Nginx reverse proxy configuration connects external web traffic to a backend application and why validating Nginx configuration before reloading the service is important.
-
-### Issue faced and solution
-
-The initial configuration used port 3000, while the application defaults to port 8080.
-
-The mismatch was identified during review. The final Nginx configuration still needs to be corrected and verified on the server.
-
-**Current status:** Nginx role prepared; live configuration testing pending.
-
-## Task 3: Project Structure and Configuration
-
-The project follows this structure:
-
-```text
+``` text
 epicbook-prod/
-│
 ├── ansible/
 │   ├── group_vars/
-│   │   ├── web.yml
-│   │   └── web/
-│   │       └── vault.yml
-│   │
 │   ├── roles/
 │   │   ├── common/
 │   │   ├── epicbook/
 │   │   ├── mysql/
 │   │   └── nginx/
-│   │
 │   ├── inventory.ini.example
 │   └── site.yml
-│
 ├── terraform/
 │   └── azure/
 │       ├── main.tf
 │       ├── providers.tf
 │       ├── variables.tf
 │       └── .terraform.lock.hcl
-│
 ├── .gitignore
 └── README.md
 ```
 
-### Security measures implemented
+## Prerequisites
 
-- Generated a dedicated SSH key pair.
-- Restricted SSH access through a configurable CIDR variable.
-- Stored the database password using Ansible Vault.
-- Excluded Terraform state files from Git.
-- Excluded the actual Ansible inventory from Git.
-- Excluded private keys and sensitive configuration files from version control.
+The project workflow uses:
 
-## Issues Faced and How I Addressed Them
+-   Terraform
+-   Ansible
+-   An SSH client and `ssh-keygen`
+-   An Azure subscription for cloud provisioning
+-   An Ubuntu Linux VM for remote Ansible execution
 
-| Issue | Action taken | Status |
-|---|---|---|
-| Missing SSH key | Generated a dedicated ED25519 key pair | Resolved |
-| Incorrect SSH public-key path | Updated Terraform to use the new public key | Resolved |
-| Unrestricted SSH access | Introduced an SSH CIDR variable | Resolved in configuration |
-| Hardcoded database password | Replaced it with an Ansible Vault variable | Resolved |
-| Incorrect database name | Changed the database configuration to `bookstore` | Resolved |
-| Git detecting the home directory | Initialized a separate Git repository inside the project directory | Resolved |
-| Sensitive files appearing in Git | Updated `.gitignore` to exclude Vault, inventory and Terraform state files | Resolved |
-| Nginx/application port mismatch | Identified the mismatch between ports 3000 and 8080 | Correction pending |
-| Azure account unavailable | Continued with local configuration and validation | Deployment pending |
+Azure provisioning and remote execution require an available Azure
+subscription and a provisioned VM.
 
-## What I Learned
+## SSH Key Preparation
 
-Through this project, I gained practical experience in:
+A dedicated ED25519 key pair was generated for this project:
 
-- Writing Terraform configuration for cloud infrastructure.
-- Initializing and validating Terraform projects.
-- Generating SSH keys for automated server access.
-- Organizing Ansible automation using roles.
-- Protecting sensitive variables using Ansible Vault.
-- Configuring MySQL for an application environment.
-- Preparing Nginx reverse proxy configuration.
-- Managing infrastructure code using Git and GitHub.
-- Applying security practices to Infrastructure as Code projects.
+``` bash
+ssh-keygen -t ed25519 -C "epicbook-azure" -f ~/.ssh/epicbook_azure
+```
 
-## Conclusion
+Terraform references the public key:
 
-This project has helped me understand how Terraform and Ansible work together in an Infrastructure as Code workflow.
+``` text
+~/.ssh/epicbook_azure.pub
+```
 
-I prepared the Terraform infrastructure configuration, generated a dedicated SSH key pair, organized the Ansible automation into reusable roles and secured the database credentials using Ansible Vault.
+Keep the private key (`~/.ssh/epicbook_azure`) outside the repository.
+Never commit or share it.
 
-I successfully initialized and validated the Terraform configuration and passed the Ansible playbook syntax check.
+## Terraform Local Validation
 
-However, the Azure infrastructure provisioning, server connectivity, application deployment and live verification stages remain pending because an Azure subscription is not currently available.
+The following local checks were completed:
 
-The project is therefore prepared for the next stage: provisioning the cloud infrastructure and executing the Ansible deployment.
+``` bash
+terraform fmt -recursive terraform/azure
+terraform -chdir=terraform/azure init -backend=false
+terraform -chdir=terraform/azure validate
+```
 
-## Screenshot Evidence
+Terraform initialization used `-backend=false`. These commands format,
+initialize and validate the local configuration; they do **not**
+provision Azure resources.
 
-Insert genuine screenshots of the completed local work in the following positions.
+## Ansible Configuration Validation
 
-| Screenshot | Evidence to include |
-|---|---|
-| 1 | Dedicated SSH key generation |
-| 2 | Terraform configuration showing the Azure resources |
-| 3 | Terraform initialization output |
-| 4 | Terraform validation showing `Success!` |
-| 5 | Ansible Vault creation (without displaying passwords) |
-| 6 | Ansible syntax check showing the playbook name |
-| 7 | Git ignore checks showing sensitive files excluded |
-| 8 | Git commit showing the project files committed |
+The playbook syntax check was completed with:
 
-The following screenshots should be added only after cloud deployment:
+``` bash
+ansible-playbook --syntax-check \
+  -i ansible/inventory.ini.example \
+  --ask-vault-pass \
+  ansible/site.yml
+```
 
-- Terraform apply showing successful resource creation.
-- Terraform outputs showing the VM public IP.
-- Successful passwordless SSH connection.
-- Ansible execution showing `failed=0`.
-- Nginx configuration and successful validation.
-- EpicBook application successfully loading in a browser.
-- Ansible idempotency re-run.
+A successful syntax check confirms that Ansible can parse the playbook.
+It does not confirm that the roles have been executed on a remote
+server.
 
-**Note:** No cloud deployment screenshots are included yet because the Azure deployment has not been performed.
+## Secrets and Repository Hygiene
+
+The database password is stored as an Ansible Vault-backed variable
+rather than as a plaintext value in the MySQL task.
+
+Security practices prepared for this project:
+
+-   Keep the private SSH key outside the repository.
+-   Store sensitive database configuration using Ansible Vault.
+-   Do not commit the Vault password or decrypted secrets.
+-   Exclude actual Ansible inventory files and Terraform state files
+    from Git.
+-   Restrict SSH ingress through `admin_ssh_cidr`.
+-   Review `git status` before committing to ensure sensitive files are
+    not staged.
+
+Do not place passwords, private keys, access tokens or decrypted Vault
+contents in screenshots, issue reports or commits.
+
+## Deployment Status and Remaining Work
+
+The following local preparation and validation work has been completed:
+
+-   Terraform configuration prepared.
+-   Terraform formatting, initialization and validation completed.
+-   Dedicated ED25519 SSH key pair generated.
+-   Ansible roles and playbook prepared.
+-   Database name aligned with `bookstore`.
+-   Database password moved to an Ansible Vault-backed variable.
+-   Ansible playbook syntax check passed.
+-   Git ignore rules prepared for sensitive files and Terraform state.
+
+The following work remains pending because an Azure VM has not yet been
+provisioned:
+
+1.  Provision the Azure infrastructure.
+2.  Verify SSH access to the VM using the dedicated private key.
+3.  Run the Ansible playbook against the VM.
+4.  Correct and validate the Nginx upstream configuration.
+5.  Verify that the EpicBook application is accessible through the HTTP
+    endpoint.
+6.  Run the Ansible playbook a second time and inspect the recap to
+    confirm idempotent behavior.
+
+### Important Nginx configuration note
+
+During configuration review, a port mismatch was identified: the Nginx
+template referenced port `3000`, while the EpicBook application uses
+port `8080` by default. The template at:
+
+``` text
+ansible/roles/nginx/templates/epicbook.conf.j2
+```
+
+must be corrected to proxy to `127.0.0.1:8080` and validated on the
+server before deployment is considered complete. The planned Nginx
+validation command is:
+
+``` bash
+sudo nginx -t
+```
+
+## Learning Outcomes
+
+This project provides practical experience with:
+
+-   Declarative infrastructure management using Terraform.
+-   Preparing and validating Terraform configuration before
+    provisioning.
+-   SSH public-key authentication.
+-   Reusable Ansible roles and playbook organization.
+-   Protecting sensitive variables with Ansible Vault.
+-   Nginx reverse-proxy configuration for a Node.js application.
+-   Git hygiene for inventories, secrets and Terraform state.
+-   Separating local validation from actual cloud deployment and live
+    verification.
+
+## Project Status
+
+**Local preparation:** Completed\
+**Terraform validation:** Passed\
+**Ansible syntax validation:** Passed\
+**Azure provisioning:** Pending\
+**Remote configuration and application deployment:** Pending\
+**Live application and idempotency verification:** Pending
