@@ -1,0 +1,43 @@
+- name: Install Node.js and npm
+  apt:
+    name:
+      - nodejs
+      - npm
+    state: present
+
+- name: Install PM2 globally
+  npm:
+    name: pm2
+    global: yes
+
+# ✅ FIX HERE
+- name: Mark directory as safe for git
+  command: git config --global --add safe.directory {{ app_dest }}
+
+- name: Clone EpicBook repository
+  git:
+    repo: "{{ app_repo }}"
+    dest: "{{ app_dest }}"
+    force: yes
+
+- name: Install dependencies
+  command: npm install
+  args:
+    chdir: "{{ app_dest }}"
+
+- name: Start app with PM2
+  command: pm2 start server.js
+  args:
+    chdir: "{{ app_dest }}"
+  ignore_errors: yes
+
+- name: Save PM2 process
+  command: pm2 save
+  ignore_errors: yes
+
+- name: Set ownership
+  file:
+    path: "{{ app_dest }}"
+    owner: www-data
+    group: www-data
+    recurse: yes

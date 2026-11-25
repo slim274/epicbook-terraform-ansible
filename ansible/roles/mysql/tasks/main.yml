@@ -1,0 +1,31 @@
+- name: Install MySQL
+  apt:
+    name: mysql-server
+    state: present
+    update_cache: yes
+
+- name: Start MySQL
+  service:
+    name: mysql
+    state: started
+    enabled: yes
+
+- name: Install MySQL Python dependency
+  apt:
+    name: python3-pymysql
+    state: present
+
+- name: Create database
+  mysql_db:
+    name: bookstore
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+
+- name: Create database user
+  mysql_user:
+    name: epicuser
+    password: "{{ mysql_app_password }}"
+    priv: "bookstore.*:ALL"
+    host: localhost
+    state: present
+    login_unix_socket: /var/run/mysqld/mysqld.sock

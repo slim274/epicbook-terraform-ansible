@@ -1,0 +1,9 @@
+[web]
+YOUR_VM_PUBLIC_IP
+
+[web:vars]
+ansible_user=azureuser
+ansible_ssh_private_key_file=~/.ssh/epicbook_azure
+ansible_become=true
+ansible_become_method=sudo
+ansible_python_interpreter=/usr/bin/python3

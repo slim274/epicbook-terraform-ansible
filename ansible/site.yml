@@ -1,0 +1,28 @@
+---
+- name: Prepare system
+  hosts: web
+  become: true
+  gather_facts: false
+  roles:
+    - common
+
+- name: Setup database
+  hosts: web
+  become: true
+  gather_facts: false
+  roles:
+    - mysql
+
+- name: Install and configure Nginx
+  hosts: web
+  become: true
+  gather_facts: false
+  roles:
+    - nginx
+
+- name: Deploy EpicBook app
+  hosts: web
+  become: true
+  gather_facts: false
+  roles:
+    - epicbook
