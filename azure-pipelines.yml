@@ -1,0 +1,254 @@
+# EpicBook CI/CD pipeline
+#
+# Required Azure DevOps setup before running the deployment stage:
+# 1. Agent pool: SelfHostedPool (Ubuntu Linux agent with sudo access).
+# 2. Service connection: epicbook-azure-service-connection.
+# 3. Secure Files: epicbook_azure and epicbook_azure.pub (matching SSH key pair).
+# 4. Pipeline variables:
+#      adminSshCidr      = your trusted public IP in CIDR notation (for example x.x.x.x/32)
+#      mysqlAppPassword  = secret value for the EpicBook MySQL application user.
+#
+# Deployment is opt-in at queue time. Normal pushes run validation only.
+# Terraform currently uses the local state backend; use one persistent self-hosted
+# agent for this assignment. Configure an Azure Storage remote backend before
+# using multiple agents or treating this as a production deployment.
+
+trigger:
+  branches:
+    include:
+      - main
+      - feat/*
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: deployToAzure
+    displayName: Run Terraform apply and Ansible deployment
+    type: boolean
+    default: false
+
+variables:
+  - name: terraformVersion
+    value: '1.9.8'
+  - name: azureServiceConnection
+    value: 'epicbook-azure-service-connection'
+  - name: adminSshCidr
+    value: ''
+  - name: mysqlAppPassword
+    value: ''
+
+pool:
+  name: SelfHostedPool
+
+stages:
+  - stage: Validate
+    displayName: Validate Terraform configuration
+    jobs:
+      - job: ValidateTerraform
+        displayName: Terraform format and validation
+        steps:
+          - checkout: self
+            clean: false
+
+          - bash: |
+              set -euo pipefail
+
+              sudo apt-get update
+              sudo apt-get install -y curl unzip
+
+              if ! command -v terraform >/dev/null 2>&1; then
+                case "$(uname -m)" in
+                  x86_64) TF_ARCH="amd64" ;;
+                  aarch64|arm64) TF_ARCH="arm64" ;;
+                  *)
+                    echo "Unsupported agent architecture: $(uname -m)"
+                    exit 1
+                    ;;
+                esac
+
+                curl -fsSLo /tmp/terraform.zip \
+                  "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_${TF_ARCH}.zip"
+                unzip -o /tmp/terraform.zip -d /tmp
+                sudo install -m 0755 /tmp/terraform /usr/local/bin/terraform
+              fi
+
+              terraform version
+              terraform fmt -check -recursive terraform/azure
+              terraform -chdir=terraform/azure init -backend=false -input=false
+              terraform -chdir=terraform/azure validate
+            displayName: Install Terraform and validate configuration
+
+  - stage: Deploy
+    displayName: Provision Azure and deploy EpicBook
+    dependsOn: Validate
+    condition: and(succeeded(), eq('${{ parameters.deployToAzure }}', 'true'))
+    jobs:
+      - job: DeployEpicBook
+        displayName: Terraform and Ansible deployment
+        steps:
+          - checkout: self
+            clean: false
+
+          - task: DownloadSecureFile@1
+            name: sshPrivateKey
+            displayName: Download EpicBook SSH private key
+            inputs:
+              secureFile: epicbook_azure
+
+          - task: DownloadSecureFile@1
+            name: sshPublicKey
+            displayName: Download EpicBook SSH public key
+            inputs:
+              secureFile: epicbook_azure.pub
+
+          - bash: |
+              set -euo pipefail
+
+              sudo apt-get update
+              sudo apt-get install -y curl unzip ansible openssh-client python3
+
+              if ! command -v terraform >/dev/null 2>&1; then
+                case "$(uname -m)" in
+                  x86_64) TF_ARCH="amd64" ;;
+                  aarch64|arm64) TF_ARCH="arm64" ;;
+                  *)
+                    echo "Unsupported agent architecture: $(uname -m)"
+                    exit 1
+                    ;;
+                esac
+
+                curl -fsSLo /tmp/terraform.zip \
+                  "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_${TF_ARCH}.zip"
+                unzip -o /tmp/terraform.zip -d /tmp
+                sudo install -m 0755 /tmp/terraform /usr/local/bin/terraform
+              fi
+
+              mkdir -p "$HOME/.ssh"
+              chmod 700 "$HOME/.ssh"
+              install -m 600 "$(sshPrivateKey.secureFilePath)" "$HOME/.ssh/epicbook_azure"
+              install -m 644 "$(sshPublicKey.secureFilePath)" "$HOME/.ssh/epicbook_azure.pub"
+              touch "$HOME/.ssh/known_hosts"
+              chmod 600 "$HOME/.ssh/known_hosts"
+
+              terraform version
+              ansible --version
+            displayName: Install deployment tools and prepare SSH keys
+
+          - task: AzureCLI@2
+            displayName: Provision Azure infrastructure and deploy with Ansible
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              workingDirectory: $(Build.SourcesDirectory)
+              addSpnToEnvironment: true
+              inlineScript: |
+                set -euo pipefail
+
+                # AzureRM provider v4 requires subscription and service-principal
+                # credentials to be available to Terraform.
+                export ARM_CLIENT_ID="$servicePrincipalId"
+                export ARM_CLIENT_SECRET="$servicePrincipalKey"
+                export ARM_TENANT_ID="$tenantId"
+                export ARM_SUBSCRIPTION_ID="$subscriptionId"
+
+                if [[ -z "${ADMIN_SSH_CIDR}" ]]; then
+                  echo "Set the pipeline variable adminSshCidr to your trusted public IP in CIDR notation."
+                  exit 1
+                fi
+
+                if [[ -z "${MYSQL_APP_PASSWORD}" ]]; then
+                  echo "Set mysqlAppPassword as a secret pipeline variable before deployment."
+                  exit 1
+                fi
+
+                TF_PLAN_FILE="${AGENT_TEMPDIRECTORY}/epicbook.tfplan"
+                INVENTORY_FILE="${AGENT_TEMPDIRECTORY}/epicbook-inventory.ini"
+                EXTRA_VARS_FILE="${AGENT_TEMPDIRECTORY}/ansible-extra-vars.json"
+                KNOWN_HOSTS_TMP="${AGENT_TEMPDIRECTORY}/epicbook-known-hosts"
+
+                cleanup() {
+                  rm -f "$TF_PLAN_FILE" "$EXTRA_VARS_FILE" "$KNOWN_HOSTS_TMP"
+                }
+                trap cleanup EXIT
+
+                echo "Initializing Terraform..."
+                terraform -chdir=terraform/azure init -input=false
+
+                echo "Planning Azure infrastructure..."
+                terraform -chdir=terraform/azure plan \
+                  -input=false \
+                  -var="admin_ssh_cidr=${ADMIN_SSH_CIDR}" \
+                  -out="$TF_PLAN_FILE"
+
+                echo "Applying Terraform plan..."
+                terraform -chdir=terraform/azure apply \
+                  -input=false \
+                  -auto-approve \
+                  "$TF_PLAN_FILE"
+
+                PUBLIC_IP="$(terraform -chdir=terraform/azure output -raw public_ip)"
+                ADMIN_USER="$(terraform -chdir=terraform/azure output -raw admin_user)"
+
+                if [[ -z "$PUBLIC_IP" || -z "$ADMIN_USER" ]]; then
+                  echo "Terraform did not return the VM public IP and admin username."
+                  exit 1
+                fi
+
+                echo "EpicBook VM public IP: $PUBLIC_IP"
+                echo "##vso[task.setvariable variable=EPICBOOK_PUBLIC_IP]$PUBLIC_IP"
+
+                cat > "$INVENTORY_FILE" <<EOF
+                [web]
+                ${PUBLIC_IP} ansible_user=${ADMIN_USER} ansible_ssh_private_key_file=${HOME}/.ssh/epicbook_azure ansible_python_interpreter=/usr/bin/python3
+
+                [web:vars]
+                ansible_become=true
+                ansible_become_method=sudo
+                EOF
+
+                echo "Waiting for SSH on the new VM..."
+                SSH_READY=false
+                for attempt in $(seq 1 30); do
+                  if ssh-keyscan -T 5 -H "$PUBLIC_IP" > "$KNOWN_HOSTS_TMP" 2>/dev/null \
+                    && [[ -s "$KNOWN_HOSTS_TMP" ]]; then
+                    cat "$KNOWN_HOSTS_TMP" >> "$HOME/.ssh/known_hosts"
+                    SSH_READY=true
+                    break
+                  fi
+                  sleep 10
+                done
+
+                if [[ "$SSH_READY" != "true" ]]; then
+                  echo "SSH did not become available on $PUBLIC_IP within five minutes."
+                  exit 1
+                fi
+
+                python3 - <<'PY'
+                import json
+                import os
+
+                path = os.environ["ANSIBLE_EXTRA_VARS_FILE"]
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(
+                        {"vault_mysql_app_password": os.environ["MYSQL_APP_PASSWORD"]},
+                        handle,
+                    )
+                os.chmod(path, 0o600)
+                PY
+
+                echo "Running the existing Ansible playbook..."
+                ansible-playbook \
+                  -i "$INVENTORY_FILE" \
+                  ansible/site.yml \
+                  --extra-vars "@$EXTRA_VARS_FILE"
+
+                echo "EpicBook deployment playbook completed."
+            env:
+              ADMIN_SSH_CIDR: $(adminSshCidr)
+              MYSQL_APP_PASSWORD: $(mysqlAppPassword)
+              AGENT_TEMPDIRECTORY: $(Agent.TempDirectory)
+              ANSIBLE_EXTRA_VARS_FILE: $(Agent.TempDirectory)/ansible-extra-vars.json
